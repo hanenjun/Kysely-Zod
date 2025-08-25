@@ -1,0 +1,34 @@
+{
+  "name": "ks",
+  "version": "1.0.0",
+  "description": "Web3 data solution with Kysely + Slonik + Zod",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "ts-node src/index.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "web3",
+    "kysely",
+    "slonik",
+    "zod",
+    "bigint"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@types/bn.js": "^5.1.0",
+    "@types/node": "^20.0.0",
+    "bn.js": "^5.2.0",
+    "kysely": "^0.26.0",
+    "pg": "^8.16.3",
+    "slonik": "^37.0.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.0.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.15.5"
+  }
+}
