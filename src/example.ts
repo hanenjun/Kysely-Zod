@@ -1,7 +1,8 @@
 import { TokenRepository } from './repositories/token.repository';
 import { TokenService } from './services/token.service';
-import { createQueryExecutor, QueryExecutor } from './utils/database';
+import { createQueryExecutor, QueryExecutor, createSlonikPool } from './utils/database';
 import { CreateToken, TokenTableSchema } from './models/token';
+import { DatabasePool } from 'slonik';
 
 // 添加全局未捕获异常处理
 process.on('unhandledRejection', (reason, promise) => {
@@ -14,13 +15,15 @@ process.on('uncaughtException', (error) => {
 
 async function main() {
   let queryExecutor: QueryExecutor | undefined;
+  let slonikPool: DatabasePool | undefined;
   try {
     console.log('开始连接数据库...');
     
     queryExecutor = await createQueryExecutor();
+    slonikPool = await createSlonikPool();
     console.log('数据库连接成功！');
     
-    const tokenRepository = new TokenRepository(queryExecutor);
+    const tokenRepository = new TokenRepository(queryExecutor, slonikPool);
     const tokenService = new TokenService(tokenRepository);
 
     // 创建新的代币
@@ -58,7 +61,14 @@ async function main() {
       try {
         await queryExecutor.end();
       } catch (error) {
-        console.error('关闭数据库连接时发生错误:', error instanceof Error ? error.message : '未知错误');
+        console.error('关闭 Kysely 连接时发生错误:', error instanceof Error ? error.message : '未知错误');
+      }
+    }
+    if (slonikPool) {
+      try {
+        await slonikPool.end();
+      } catch (error) {
+        console.error('关闭 Slonik 连接时发生错误:', error instanceof Error ? error.message : '未知错误');
       }
     }
   }

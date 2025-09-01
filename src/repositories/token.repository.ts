@@ -1,105 +1,86 @@
-import { Kysely, Selectable } from 'kysely';
-import { Database, QueryExecutor } from '../utils/database';
-import { TokenTable, TokenTableSchema, CreateTokenSchema } from '../models/token';
+import { Selectable } from 'kysely';
+import { TokenTable, CreateTokenSchema, UpdateTokenSchema, TokenTableSchema, TokenTableData } from '../models/token';
+import { QueryExecutor } from '../utils/database';
+import { DatabasePool, sql } from 'slonik';
 import { z } from 'zod';
 
 export class TokenRepository {
-  private readonly kysely: Kysely<Database>;
+  constructor(
+    private readonly queryExecutor: QueryExecutor,
+    private readonly slonikPool: DatabasePool
+  ) {}
 
-  constructor(private readonly queryExecutor: QueryExecutor) {
-    this.kysely = queryExecutor.getKysely();
+  async create(data: z.infer<typeof CreateTokenSchema>): Promise<TokenTableData> {
+    // 使用 Zod 验证输入数据
+    const validatedData = CreateTokenSchema.parse(data);
+    
+    const now = new Date().toISOString();
+    
+    // 直接使用 Slonik 的 SQL 构建
+    const result = await this.slonikPool.query(sql.type(TokenTableSchema)`
+      INSERT INTO tokens (address, total_supply, decimals, symbol, name, created_at, updated_at)
+      VALUES (${validatedData.address}, ${validatedData.total_supply}, ${validatedData.decimals}, ${validatedData.symbol}, ${validatedData.name}, ${now}, ${now})
+      RETURNING id, address, total_supply, decimals, symbol, name, created_at, updated_at
+    `);
+    
+    if (result.rows.length === 0) {
+      throw new Error('插入失败');
+    }
+    
+    // 使用 Zod 验证返回结果
+    const validatedResult = TokenTableSchema.parse(result.rows[0]);
+    
+    return validatedResult;
   }
 
-  async create(
-    address: string,
-    totalSupply: string,
-    decimals: number,
-    symbol: string,
-    name: string
-  ): Promise<Selectable<TokenTable>> {
-    // Validate input data using Zod schema
-    const inputData = {
-      address,
-      total_supply: totalSupply,
-      decimals,
-      symbol,
-      name
-    };
-    
-    // Validate against CreateTokenSchema
-    const validatedData = CreateTokenSchema.parse(inputData);
-    
-    const query = this.kysely
-      .insertInto('tokens')
-      .values({
-        address: validatedData.address,
-        total_supply: validatedData.total_supply,
-        decimals: validatedData.decimals,
-        symbol: validatedData.symbol,
-        name: validatedData.name,
-        created_at: new Date(),
-        updated_at: new Date()
-      })
-      .returning([
-        'id',
-        'address',
-        'total_supply',
-        'decimals',
-        'symbol',
-        'name',
-        'created_at',
-        'updated_at'
-      ]);
-
-    const result = await this.queryExecutor.executeKyselyInsert<TokenTable>(query, TokenTableSchema);
-    
-    return result as Selectable<TokenTable>;
-  }
-
-  async findById(id: number): Promise<Selectable<TokenTable> | undefined> {
+  async findById(id: number): Promise<TokenTableData | undefined> {
     // Validate ID
     const validatedId = z.number().int().positive().parse(id);
     
-    const query = this.kysely
-      .selectFrom('tokens')
-      .selectAll()
-      .where('id', '=', validatedId);
-
-    const result = await this.queryExecutor.executeKyselyQueryOne(query, TokenTableSchema);
+    // 直接使用 Slonik 的 SQL 构建
+    const result = await this.slonikPool.query(sql.type(TokenTableSchema)`
+      SELECT id, address, total_supply, decimals, symbol, name, created_at, updated_at
+      FROM tokens
+      WHERE id = ${id}
+    `);
     
-    return result as Selectable<TokenTable> | undefined;
+    if (result.rows.length === 0) {
+      return undefined;
+    }
+    
+    // 使用 Zod 验证返回结果
+    const validatedResult = TokenTableSchema.parse(result.rows[0]);
+    
+    return validatedResult;
   }
 
   async updateTotalSupply(
     id: number,
     totalSupply: string
-  ): Promise<Selectable<TokenTable> | undefined> {
+  ): Promise<TokenTableData | undefined> {
     // Validate ID
     const validatedId = z.number().int().positive().parse(id);
     
     // Validate total supply format
     const validatedTotalSupply = z.string().regex(/^\d+$/, 'Total supply must be a numeric string').parse(totalSupply);
     
-    const query = this.kysely
-      .updateTable('tokens')
-      .set({
-        total_supply: validatedTotalSupply,
-        updated_at: new Date()
-      })
-      .where('id', '=', validatedId)
-      .returning([
-        'id',
-        'address',
-        'total_supply',
-        'decimals',
-        'symbol',
-        'name',
-        'created_at',
-        'updated_at'
-      ]);
-
-    const result = await this.queryExecutor.executeKyselyUpdate(query, TokenTableSchema);
+    const now = new Date().toISOString();
     
-    return result as Selectable<TokenTable> | undefined;
+    // 直接使用 Slonik 的 SQL 构建
+    const result = await this.slonikPool.query(sql.type(TokenTableSchema)`
+      UPDATE tokens
+      SET total_supply = ${totalSupply}, updated_at = ${now}
+      WHERE id = ${id}
+      RETURNING id, address, total_supply, decimals, symbol, name, created_at, updated_at
+    `);
+    
+    if (result.rows.length === 0) {
+      return undefined;
+    }
+    
+    // 使用 Zod 验证返回结果
+    const validatedResult = TokenTableSchema.parse(result.rows[0]);
+    
+    return validatedResult;
   }
 }

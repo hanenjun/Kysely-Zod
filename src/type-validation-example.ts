@@ -1,4 +1,4 @@
-import { createQueryExecutor } from './utils/database';
+import { createQueryExecutor, createSlonikPool } from './utils/database';
 import { TokenService } from './services/token.service';
 import { TokenRepository } from './repositories/token.repository';
 import { z } from 'zod';
@@ -11,7 +11,8 @@ async function demonstrateTypeValidation() {
     // 创建数据库连接
     console.log('1. 连接数据库...');
     const queryExecutor = await createQueryExecutor();
-    const tokenRepository = new TokenRepository(queryExecutor);
+    const slonikPool = await createSlonikPool();
+    const tokenRepository = new TokenRepository(queryExecutor, slonikPool);
     const tokenService = new TokenService(tokenRepository);
     
     // 正常的代币创建（应该成功）
@@ -94,8 +95,8 @@ async function demonstrateTypeValidation() {
           decimals: 18,
           symbol: 'TEST',
           name: 'Test Token',
-          created_at: Date.now(),
-          updated_at: Date.now()
+          created_at: new Date(),
+          updated_at: new Date()
         }
       },
       {
@@ -107,8 +108,8 @@ async function demonstrateTypeValidation() {
           decimals: 18,
           symbol: 'TEST',
           name: 'Test Token',
-          created_at: Date.now(),
-          updated_at: Date.now()
+          created_at: new Date(),
+          updated_at: new Date()
         }
       },
       {
@@ -120,8 +121,8 @@ async function demonstrateTypeValidation() {
           decimals: 25, // 错误：超过最大值18
           symbol: 'TEST',
           name: 'Test Token',
-          created_at: Date.now(),
-          updated_at: Date.now()
+          created_at: new Date(),
+          updated_at: new Date()
         }
       },
       {
@@ -133,8 +134,8 @@ async function demonstrateTypeValidation() {
           decimals: 18,
           symbol: 'VERYLONGSYMBOL', // 错误：超过10个字符
           name: 'Test Token',
-          created_at: Date.now(),
-          updated_at: Date.now()
+          created_at: new Date(),
+          updated_at: new Date()
         }
       }
     ];

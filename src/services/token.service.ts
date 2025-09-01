@@ -1,38 +1,49 @@
 import { TokenRepository } from '../repositories/token.repository';
-import { CreateTokenSchema, UpdateTokenSchema, CreateToken, UpdateToken, TokenSchema } from '../models/token';
+import { CreateTokenSchema, UpdateTokenSchema, CreateToken, UpdateToken, TokenSchema, TokenTable, TokenTableSchema, TokenTableData } from '../models/token';
 import { Selectable } from 'kysely';
 import { z } from 'zod';
 
 export class TokenService {
   constructor(private readonly tokenRepository: TokenRepository) {}
 
-  async create(tokenData: CreateToken): Promise<Selectable<z.infer<typeof TokenSchema>>> {
+  async create(tokenData: CreateToken): Promise<TokenTableData> {
     // Validate input data using Zod schema
     const validatedData = CreateTokenSchema.parse(tokenData);
     
-    return this.tokenRepository.create(
-      validatedData.address,
-      validatedData.total_supply,
-      validatedData.decimals,
-      validatedData.symbol,
-      validatedData.name
-    );
+    const result = await this.tokenRepository.create(validatedData);
+    
+    // 使用 TokenTableSchema 进行额外的类型验证和转换
+    return TokenTableSchema.parse(result);
   }
 
-  async findById(id: number): Promise<Selectable<z.infer<typeof TokenSchema>> | undefined> {
+  async findById(id: number): Promise<TokenTableData | undefined> {
     // Validate ID
     const validatedId = z.number().int().positive().parse(id);
-    return this.tokenRepository.findById(validatedId);
+    const result = await this.tokenRepository.findById(validatedId);
+    
+    if (!result) {
+      return undefined;
+    }
+    
+    // 使用 TokenTableSchema 进行类型验证和转换
+    return TokenTableSchema.parse(result);
   }
 
   async updateTotalSupply(
     id: number,
     updateData: Pick<UpdateToken, 'total_supply'>
-  ): Promise<Selectable<z.infer<typeof TokenSchema>> | undefined> {
+  ): Promise<TokenTableData | undefined> {
     // Validate input data
     const validatedId = z.number().int().positive().parse(id);
     const validatedData = UpdateTokenSchema.pick({ total_supply: true }).parse(updateData);
     
-    return this.tokenRepository.updateTotalSupply(validatedId, validatedData.total_supply!);
+    const result = await this.tokenRepository.updateTotalSupply(validatedId, validatedData.total_supply!);
+    
+    if (!result) {
+      return undefined;
+    }
+    
+    // 使用 TokenTableSchema 进行类型验证和转换
+    return TokenTableSchema.parse(result);
   }
 }

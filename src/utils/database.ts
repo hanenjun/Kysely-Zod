@@ -1,8 +1,42 @@
-import { createPool, DatabasePool, sql } from 'slonik';
-import { Kysely, PostgresDialect, Compilable, Selectable } from 'kysely';
-import { Pool, Client } from 'pg';
+import { createPool, DatabasePool, sql, createTypeParserPreset } from 'slonik';
+import { Kysely, Compilable, Selectable } from 'kysely';
 import { TokenTable } from '../models/token';
 import { z } from 'zod';
+
+// 辅助函数：将 Kysely 编译的查询转换为 Slonik 可执行的 SQL
+const buildSlonikQuery = (compiledQuery: { sql: string; parameters: readonly unknown[] }) => {
+  let sqlString = compiledQuery.sql;
+  const params = compiledQuery.parameters;
+  
+  console.log('原始 SQL:', sqlString);
+  console.log('参数:', params);
+  
+  // 手动替换参数占位符
+  params.forEach((param, index) => {
+    const placeholder = `$${index + 1}`;
+    let value: string;
+    
+    if (param === null || param === undefined) {
+      value = 'NULL';
+    } else if (typeof param === 'string') {
+      value = `'${param.replace(/'/g, "''")}'`;
+    } else if (typeof param === 'number') {
+      value = param.toString();
+    } else if (typeof param === 'boolean') {
+      value = param ? 'TRUE' : 'FALSE';
+    } else {
+      value = `'${String(param).replace(/'/g, "''")}'`;
+    }
+    
+    sqlString = sqlString.replace(new RegExp('\\' + placeholder + '\\b', 'g'), value);
+  });
+  
+  console.log('最终 SQL:', sqlString);
+  
+  // 使用 Function 构造函数创建 sql 模板字符串
+  const createSqlQuery = new Function('sql', `return sql\`${sqlString}\`;`);
+  return createSqlQuery(sql);
+};
 
 // 数据库表类型定义
 export interface Database {
@@ -12,23 +46,17 @@ export interface Database {
 // 数据库配置
 const CONNECTION_STRING = 'postgres://postgres:postgres@127.0.0.1:7543/saito_db';
 
-// 测试原生pg连接
-export const testPgConnection = async (): Promise<void> => {
-  const client = new Client({
-    connectionString: CONNECTION_STRING,
-  });
-  
+// 测试 Slonik 连接
+export const testSlonikConnection = async (pool: DatabasePool): Promise<void> => {
   try {
-    console.log('使用原生pg客户端连接...');
-    await client.connect();
-    const result = await client.query('SELECT 1 as test');
+    console.log('测试 Slonik 连接...');
+    const result = await pool.query(sql.unsafe`SELECT 1 as test`);
     // 类型校验测试查询结果
     const testSchema = z.object({ test: z.number() });
     const validatedRows = result.rows.map(row => testSchema.parse(row));
-    console.log('原生pg连接成功:', validatedRows);
-    await client.end();
+    console.log('Slonik 连接成功:', validatedRows);
   } catch (error) {
-    console.error('原生pg连接失败:', error);
+    console.error('Slonik 连接失败:', error);
     throw error;
   }
 };
@@ -40,15 +68,43 @@ export const createSlonikPool = async (): Promise<DatabasePool> => {
     console.log('正在连接数据库...');
     console.log('连接字符串:', connectionString);
     
-    // 先测试原生连接
-    await testPgConnection();
+    console.log('创建 Slonik 连接池...');
     
-    console.log('创建Slonik连接池...');
+    // 创建 Slonik 连接池
+    const pool = await createPool(connectionString, {
+      // 配置连接池选项
+      maximumPoolSize: 10,
+      idleTimeout: 5000,
+      typeParsers: [
+        ...createTypeParserPreset(),
+        {
+          name: 'int8',
+          parse: (value) => {
+            // 将 bigint 转换为字符串
+            return value;
+          }
+        },
+        {
+          name: 'timestamp',
+          parse: (value) => {
+            // 将 timestamp 转换为 Date 对象
+            return new Date(value);
+          }
+        },
+        {
+          name: 'timestamptz',
+          parse: (value) => {
+            // 将 timestamptz 转换为 Date 对象
+            return new Date(value);
+          }
+        }
+      ]
+    });
     
-    // 使用最简配置
-    const pool = createPool(connectionString);
+    // 测试连接
+    await testSlonikConnection(pool);
     
-    console.log('Slonik连接池创建成功！');
+    console.log('Slonik 连接池创建成功！');
     return pool;
   } catch (error) {
     console.error('数据库连接失败：', error);
@@ -56,14 +112,23 @@ export const createSlonikPool = async (): Promise<DatabasePool> => {
   }
 };
 
-// 创建 Kysely 实例
+// 创建 Kysely 实例（仅用于 SQL 构建，不连接数据库）
 export const createKyselyInstance = (): Kysely<Database> => {
-  const pool = new Pool({
-    connectionString: CONNECTION_STRING,
-  });
-
+  // 我们将使用一个简化的方法：创建一个 Kysely 实例但不实际连接数据库
+  // 这样我们可以使用 Kysely 的 SQL 构建功能，然后用 Slonik 执行
+  const { PostgresDialect } = require('kysely');
+  
+  // 创建一个虚拟连接池，仅用于 SQL 构建
+  const mockPool = {
+    connect: () => Promise.resolve({
+      query: () => Promise.resolve({ rows: [] }),
+      release: () => {},
+    }),
+    end: () => Promise.resolve(),
+  };
+  
   const dialect = new PostgresDialect({
-    pool,
+    pool: mockPool as any,
   });
 
   return new Kysely<Database>({
@@ -74,17 +139,12 @@ export const createKyselyInstance = (): Kysely<Database> => {
 // 创建执行器类，使用 Kysely 生成 SQL，Slonik 执行 SQL
 export class QueryExecutor {
   private readonly kysely: Kysely<Database>;
-  private readonly pgPool: Pool;
 
   constructor(
     kysely: Kysely<Database>,
     private readonly slonikPool: DatabasePool
   ) {
     this.kysely = kysely;
-    // 创建原生 pg 连接池用于执行 Kysely 生成的 SQL
-    this.pgPool = new Pool({
-      connectionString: CONNECTION_STRING,
-    });
   }
 
   // 获取 Kysely 实例
@@ -101,11 +161,10 @@ export class QueryExecutor {
       // 使用 Kysely 编译 SQL
       const compiledQuery = queryBuilder.compile();
       
-      // 构建 SQL 查询
-      const finalSql = this.buildFinalSql(compiledQuery.sql, compiledQuery.parameters);
-      
       // 使用 Slonik 执行查询
-      const result = await this.slonikPool.query(sql.unsafe([finalSql]));
+      const result = await this.slonikPool.query(
+        buildSlonikQuery(compiledQuery)
+      );
       
       // 使用 Zod 进行类型校验
       const validatedRows = result.rows.map(row => schema.parse(row));
@@ -126,14 +185,17 @@ export class QueryExecutor {
       // 使用 Kysely 编译 SQL
       const compiledQuery = queryBuilder.compile();
       
-      // 构建 SQL 查询
-      const finalSql = this.buildFinalSql(compiledQuery.sql, compiledQuery.parameters);
-      
       // 使用 Slonik 执行查询
-      const result = await this.slonikPool.one(sql.unsafe([finalSql]));
+      const result = await this.slonikPool.query(
+        buildSlonikQuery(compiledQuery)
+      );
+      
+      if (result.rows.length === 0) {
+        return null;
+      }
       
       // 使用 Zod 进行类型校验
-      const validatedResult = schema.parse(result);
+      const validatedResult = schema.parse(result.rows[0]);
       
       return validatedResult as Selectable<T>;
     } catch (error: any) {
@@ -154,14 +216,13 @@ export class QueryExecutor {
       // 使用 Kysely 编译 SQL
       const compiledQuery = queryBuilder.compile();
       
-      // 构建 SQL 查询
-      const finalSql = this.buildFinalSql(compiledQuery.sql, compiledQuery.parameters);
-      
-      // 使用 Slonik 执行查询
-      const result = await this.slonikPool.one(sql.unsafe([finalSql]));
+      // 使用 Slonik 执行插入
+      const result = await this.slonikPool.query(
+        buildSlonikQuery(compiledQuery)
+      );
       
       // 使用 Zod 进行类型校验
-      const validatedResult = schema.parse(result);
+      const validatedResult = schema.parse(result.rows[0]);
       
       return validatedResult as Selectable<T>;
     } catch (error) {
@@ -179,14 +240,17 @@ export class QueryExecutor {
       // 使用 Kysely 编译 SQL
       const compiledQuery = queryBuilder.compile();
       
-      // 构建 SQL 查询
-      const finalSql = this.buildFinalSql(compiledQuery.sql, compiledQuery.parameters);
+      // 使用 Slonik 执行更新
+      const result = await this.slonikPool.query(
+        buildSlonikQuery(compiledQuery)
+      );
       
-      // 使用 Slonik 执行查询
-      const result = await this.slonikPool.one(sql.unsafe([finalSql]));
+      if (result.rows.length === 0) {
+        return null;
+      }
       
       // 使用 Zod 进行类型校验
-      const validatedResult = schema.parse(result);
+      const validatedResult = schema.parse(result.rows[0]);
       
       return validatedResult as Selectable<T>;
     } catch (error: any) {
@@ -198,44 +262,15 @@ export class QueryExecutor {
     }
   }
 
-  // 构建最终 SQL
-  private buildFinalSql(sqlTemplate: string, parameters: readonly unknown[]): string {
-    // 手动替换参数占位符为实际值
-    let finalSql = sqlTemplate;
-    const params = [...parameters];
-    
-    // 手动替换参数占位符为实际值
-    for (let i = 0; i < params.length; i++) {
-      const placeholder = `$${i + 1}`;
-      const param = params[i];
-      let value: string;
-      
-      if (typeof param === 'string') {
-        value = `'${param.replace(/'/g, "''")}'`;
-      } else if (param instanceof Date) {
-        value = `'${param.toISOString()}'`;
-      } else if (typeof param === 'number') {
-        value = String(param);
-      } else if (param === null || param === undefined) {
-        value = 'NULL';
-      } else {
-        value = `'${String(param).replace(/'/g, "''")}'`;
-      }
-      
-      finalSql = finalSql.replace(placeholder, value);
-    }
-    
-    return finalSql;
-  }
+
 
   // 关闭连接
   async end(): Promise<void> {
     try {
       await this.slonikPool.end();
-      await this.pgPool.end();
-      console.log('数据库连接已关闭');
+      console.log('Slonik 连接池已关闭');
     } catch (error) {
-      console.error('关闭数据库连接时出错：', error);
+      console.error('关闭 Slonik 连接池失败:', error);
       throw error;
     }
   }
